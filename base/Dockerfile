@@ -1,0 +1,83 @@
+# build a domain-server using vircadia-builder
+FROM ubuntu:20.04 as domain-server-build
+
+RUN echo UTC >/etc/timezone
+
+# The tag to pull from the Project Athena source repository. (Note defn in next stage)
+ARG REPO=https://github.com/vircadia/vircadia
+ARG TAG=master
+
+# Tell the libraries not to use the interactive dialogs
+ARG DEBIAN_FRONTEND=noninteractive
+ARG TERM=linux
+
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && apt-get install -y git vim libfindbin-libs-perl sudo
+
+RUN mkdir -p /var/lib/vircadia
+RUN mkdir -p /opt/vircadia
+
+#    && git clone --branch feature-optSkipSystemdRestart https://github.com/misterblue/vircadia-builder.git \
+# Get the builder
+ADD https://api.github.com/repos/vircadia/vircadia-builder/git/refs/heads/master vircadia-builder-git-version.json
+RUN cd /opt/vircadia \
+    && git clone https://github.com/vircadia/vircadia-builder.git \
+    && cd vircadia-builder \
+    && chmod +x vircadia-builder
+
+# Load the required libraries (the first time just loads packages)
+# ADD https://api.github.com/repos/vircadia/vircadia/git/refs/heads/${TAG} vircadia-git-version.json
+RUN cd /opt/vircadia/vircadia-builder \
+    && ./vircadia-builder \
+            --repo=$REPO \
+            --tag=$TAG \
+            --build=domain-server,assignment-client,ice-server \
+            --release-type=production \
+            --destdir /opt/vircadia \
+            --auto
+
+# Create a list of all the source dependencies needed for later phase
+RUN cd /opt/vircadia/vircadia-builder \
+    && ./vircadia-builder \
+            --repo=$REPO \
+            --tag=$TAG \
+            --destdir /opt/vircadia \
+            --keep-source \
+            --get-source-deps ubuntu-20.04 \
+            --release-type=production \
+            --auto > /opt/vircadia/builder-deps.txt
+
+# If using the system Qt, get the dependencies for that for later loading
+# NOTE: this is an attempt to integrate the system Qt. For the moment, require building Qt
+# RUN if [ ! -d /opt/vircadia/qt5-install ] ; then \
+#         cd /opt/vircadia/vircadia-builder \
+#         && ./vircadia-builder \
+#             --repo=$REPO \
+#             --tag=$TAG \
+#             --destdir /opt/vircadia \
+#             --keep-source \
+#             --get-system-qt-deps >> /opt/vircadia/builder-deps.txt ; \
+#     fi
+
+# Build the server pieces
+ADD https://api.github.com/repos/vircadia/vircadia/git/refs/heads/$TAG vircadia-git-version.json
+RUN cd /opt/vircadia/vircadia-builder \
+    && ./vircadia-builder \
+            --repo=$REPO \
+            --tag=$TAG \
+            --destdir /opt/vircadia \
+            --keep-source \
+            --build=domain-server,assignment-client,ice-server \
+            --release-type=production \
+            --skip-systemd-restart \
+            --auto
+
+# vircadia-builder puts the built image into 'install-$TAG'. Move to "install-master" so later code is simplier
+RUN if [ ! -d /opt/vircadia/install-master ] ; then \
+        mv /opt/vircadia/vircadia_20* /opt/vircadia/install_master ; \
+    fi
+
+COPY files/buildVersion.sh /tmp
+RUN mkdir -p /opt/vircadia/version \
+    && /tmp/buildVersion.sh /opt/vircadia/source /opt/vircadia/version $TAG
